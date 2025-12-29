@@ -231,7 +231,7 @@
 
 ### Q: 播放是否支持本地代理（如 127.0.0.1:9978 格式）？
 
-**A:** 不支持。播放不支持本地代理格式。
+**A:** 仅Python源支持。
 
 <br/>
 
@@ -260,13 +260,4 @@
 <br/>
 <br/>
 
-## Star History
-
-<a href="https://www.star-history.com/#bggRGjQaUbCoE/PiliPlus&Date">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=bggRGjQaUbCoE/PiliPlus&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=bggRGjQaUbCoE/PiliPlus&type=Date" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=bggRGjQaUbCoE/PiliPlus&type=Date" />
- </picture>
-</a>
 

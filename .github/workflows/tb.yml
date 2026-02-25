@@ -34,19 +34,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           SOURCE_REPO="ingriddaleusag-dotcom/PeekPiliRelease"
-          gh release list --repo "$SOURCE_REPO" --limit 1000 --json tagName,body,isPrerelease,isDraft,assets --jq '.[] | @base64' > releases_b64.txt
-      - env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          SOURCE_REPO="ingriddaleusag-dotcom/PeekPiliRelease"
           TARGET_REPO="${{ github.repository }}"
-          while read release_b64; do
-            [ -z "$release_b64" ] && continue
-            release=$(echo "$release_b64" | base64 --decode)
-            TAG_NAME=$(echo "$release" | jq -r '.tagName')
-            BODY=$(echo "$release" | jq -r '.body // ""')
-            IS_PRERELEASE=$(echo "$release" | jq -r '.isPrerelease')
-            IS_DRAFT=$(echo "$release" | jq -r '.isDraft')
+          gh release list --repo "$SOURCE_REPO" --limit 1000 --json tagName --jq '.[].tagName' > tags.txt
+          while read TAG_NAME; do
+            [ -z "$TAG_NAME" ] && continue
+            release_json=$(gh release view "$TAG_NAME" --repo "$SOURCE_REPO" --json tagName,body,isPrerelease,isDraft,assets)
+            BODY=$(echo "$release_json" | jq -r '.body // ""')
+            IS_PRERELEASE=$(echo "$release_json" | jq -r '.isPrerelease')
+            IS_DRAFT=$(echo "$release_json" | jq -r '.isDraft')
             if gh release view "$TAG_NAME" --repo "$TARGET_REPO" &>/dev/null; then
               continue
             fi
@@ -58,14 +53,15 @@ jobs:
             if ! gh release create "$TAG_NAME" --repo "$TARGET_REPO" --title "$TAG_NAME" --notes-file body.txt $PRERELEASE_FLAG $DRAFT_FLAG; then
               exit 1
             fi
-            ASSETS=$(echo "$release" | jq -r '.assets[]?.url')
+            ASSETS=$(echo "$release_json" | jq -c '.assets[]?')
             if [ -n "$ASSETS" ]; then
-              echo "$ASSETS" | while read asset_url; do
-                asset_name=$(echo "$release" | jq -r --arg url "$asset_url" '.assets[] | select(.url==$url) | .name')
+              echo "$ASSETS" | while read asset; do
+                asset_name=$(echo "$asset" | jq -r '.name')
+                asset_url=$(echo "$asset" | jq -r '.url')
                 curl -s -fL -H "Authorization: token $GH_TOKEN" -H "Accept: application/octet-stream" "$asset_url" -o "$asset_name"
                 gh release upload "$TAG_NAME" "$asset_name" --repo "$TARGET_REPO" --clobber
                 rm -f "$asset_name"
               done
             fi
             rm -f body.txt
-          done < releases_b64.txt
+          done < tags.txt

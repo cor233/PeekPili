@@ -1,0 +1,74 @@
+name: Sync Releases Daily
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  sync-releases:
+    runs-on: ubuntu-latest
+    env:
+      SOURCE_REPO: ingriddaleusag-dotcom/PeekPiliRelease
+      TARGET_REPO: cor233/PeekPili
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Checkout target repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Git
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+
+      - name: Fetch source releases (oldest first)
+        run: |
+          gh release list --repo $SOURCE_REPO --limit 1000 \
+            --json tagName,name,body,createdAt,assets --order asc > source_releases.json
+
+      - name: Sync each release to target
+        run: |
+          jq -c '.[]' source_releases.json | while read release; do
+            TAG_NAME=$(echo "$release" | jq -r '.tagName')
+            RELEASE_NAME=$(echo "$release" | jq -r '.name')
+            BODY=$(echo "$release" | jq -r '.body')
+            ASSETS=$(echo "$release" | jq -c '.assets')
+
+            if gh release view "$TAG_NAME" --repo $TARGET_REPO > /dev/null 2>&1; then
+              echo "Release $TAG_NAME already exists, skipping"
+              continue
+            fi
+
+            if ! git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+              git fetch "https://github.com/$SOURCE_REPO.git" tag "$TAG_NAME" --no-tags
+            fi
+
+            if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+              gh release create "$TAG_NAME" \
+                --repo "$TARGET_REPO" \
+                --title "$RELEASE_NAME" \
+                --notes "$BODY"
+              sleep 3
+            else
+              echo "Tag $TAG_NAME not found locally, skipping"
+              continue
+            fi
+
+            echo "$ASSETS" | jq -c '.[]' | while read asset; do
+              ASSET_NAME=$(echo "$asset" | jq -r '.name')
+              ASSET_URL=$(echo "$asset" | jq -r '.url')
+              curl -L -H "Accept: application/octet-stream" \
+                "$ASSET_URL" --output "$ASSET_NAME"
+              if [ -f "$ASSET_NAME" ]; then
+                gh release upload "$TAG_NAME" "$ASSET_NAME" --repo "$TARGET_REPO" --clobber
+                rm "$ASSET_NAME"
+              fi
+            done
+            sleep 2
+          done
+
+      - name: Cleanup
+        run: rm -f source_releases.json

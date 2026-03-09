@@ -1,4 +1,4 @@
-name: Sync Releases Daily
+name: Sync Releases
 
 on:
   schedule:

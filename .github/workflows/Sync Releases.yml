@@ -24,18 +24,16 @@ jobs:
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
 
-      - name: Fetch source releases (oldest first)
+      - name: Fetch source release list (oldest first)
         run: |
           gh release list --repo $SOURCE_REPO --limit 1000 \
-            --json tagName,name,body,createdAt,assets --order asc > source_releases.json
+            --json tagName,name,createdAt --order asc > releases.json
 
       - name: Sync each release to target
         run: |
-          jq -c '.[]' source_releases.json | while read release; do
-            TAG_NAME=$(echo "$release" | jq -r '.tagName')
-            RELEASE_NAME=$(echo "$release" | jq -r '.name')
-            BODY=$(echo "$release" | jq -r '.body')
-            ASSETS=$(echo "$release" | jq -c '.assets')
+          jq -c '.[]' releases.json | while read item; do
+            TAG_NAME=$(echo "$item" | jq -r '.tagName')
+            RELEASE_NAME=$(echo "$item" | jq -r '.name')
 
             if gh release view "$TAG_NAME" --repo $TARGET_REPO > /dev/null 2>&1; then
               echo "Release $TAG_NAME already exists, skipping"
@@ -46,18 +44,27 @@ jobs:
               git fetch "https://github.com/$SOURCE_REPO.git" tag "$TAG_NAME" --no-tags
             fi
 
-            if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
-              gh release create "$TAG_NAME" \
-                --repo "$TARGET_REPO" \
-                --title "$RELEASE_NAME" \
-                --notes "$BODY"
-              sleep 3
-            else
+            if ! git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
               echo "Tag $TAG_NAME not found locally, skipping"
               continue
             fi
 
-            echo "$ASSETS" | jq -c '.[]' | while read asset; do
+            gh release view "$TAG_NAME" --repo $SOURCE_REPO --json body,assets > detail.json
+            BODY=$(jq -r '.body' detail.json)
+            ASSETS=$(jq -c '.assets[]' detail.json)
+
+            BODY_FILE="body_$(echo $TAG_NAME | tr / _).txt"
+            echo "$BODY" > "$BODY_FILE"
+
+            gh release create "$TAG_NAME" \
+              --repo "$TARGET_REPO" \
+              --title "$RELEASE_NAME" \
+              --notes-file "$BODY_FILE"
+            rm -f "$BODY_FILE"
+            sleep 3
+
+            echo "$ASSETS" | while read asset; do
+              if [ -z "$asset" ]; then continue; fi
               ASSET_NAME=$(echo "$asset" | jq -r '.name')
               ASSET_URL=$(echo "$asset" | jq -r '.url')
               curl -L -H "Accept: application/octet-stream" \
@@ -67,8 +74,9 @@ jobs:
                 rm "$ASSET_NAME"
               fi
             done
+            rm -f detail.json
             sleep 2
           done
 
       - name: Cleanup
-        run: rm -f source_releases.json
+        run: rm -f releases.json

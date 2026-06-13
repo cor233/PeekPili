@@ -1,82 +1,64 @@
-name: Sync main branch + Releases (no assets) to Gitee
+name: Sync to Gitee
 
 on:
-  workflow_dispatch:
+  push:
+    branches: [ main ]          # 当 main 分支有推送时触发
   release:
-    types: [published]
+    types: [ published ]        # 当 GitHub 上发布 Release 时触发
 
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      # 1. 浅克隆 main 分支（无历史）
-      - name: Checkout main branch (shallow)
+      - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
-          ref: main
+          fetch-depth: 0         # 获取完整历史，以便创建 orphan 分支
 
-      # 2. 强制推送到 Gitee main 分支
-      - name: Push main branch to Gitee (force, no history)
-        env:
-          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+      - name: Setup Git user
         run: |
-          git remote add gitee https://oauth2:${GITEE_TOKEN}@gitee.com/cor233/PeekPili.git
+          git config --global user.name "github-actions"
+          git config --global user.email "actions@github.com"
+
+      # ---- 处理 main 分支（无历史记录） ----
+      - name: Create squashed main branch
+        run: |
+          git checkout main
+          git checkout --orphan temp-squash
+          git add -A
+          git commit -m "Squashed commit from GitHub main branch"
+          git branch -D main
+          git branch -m main
+
+      # ---- 添加 Gitee 远程并强制推送 main 分支 ----
+      - name: Push squashed main to Gitee
+        run: |
+          git remote add gitee https://cor233:${{ secrets.GITEE_TOKEN }}@gitee.com/cor233/PeekPili.git
           git push gitee main --force
 
-      # 3. 完整克隆（获取所有 tags）
-      - name: Full clone for tags
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: main
-          clean: false
+      # ---- 推送所有标签到 Gitee ----
+      - name: Push tags to Gitee
+        run: git push gitee --tags --force
 
-      # 4. 推送所有 tags 到 Gitee
-      - name: Push all tags to Gitee
+      # ---- 如果触发原因是 Release，则同步发行版元数据到 Gitee ----
+      - name: Sync Release metadata to Gitee
+        if: github.event_name == 'release'
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GH_RELEASE: ${{ toJson(github.event.release) }}
         run: |
-          git remote set-url gitee https://oauth2:${GITEE_TOKEN}@gitee.com/cor233/PeekPili.git
-          git push gitee --tags --force
+          TAG_NAME=$(echo "$GH_RELEASE" | jq -r '.tag_name')
+          NAME=$(echo "$GH_RELEASE" | jq -r '.name')
+          BODY=$(echo "$GH_RELEASE" | jq -r '.body')
 
-      # 5. 获取需要同步的 Release 列表
-      - name: Get release info from GitHub
-        id: get_releases
-        run: |
-          # 如果是 release 触发，只同步当前 tag；否则获取所有
-          if [ -n "${{ github.event.release.tag_name }}" ]; then
-            echo "tags=${{ github.event.release.tag_name }}" >> $GITHUB_OUTPUT
-          else
-            tags=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-              https://api.github.com/repos/${{ github.repository }}/releases | jq -r '.[].tag_name')
-            echo "tags=$tags" >> $GITHUB_OUTPUT
-          fi
-
-      # 6. 为每个 tag 在 Gitee 创建/更新 Release
-      - name: Sync releases to Gitee
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
-        run: |
-          for tag in ${{ steps.get_releases.outputs.tags }}; do
-            echo "Processing $tag"
-            # 从 GitHub 获取该 Release 的详细信息
-            release_json=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
-              https://api.github.com/repos/${{ github.repository }}/releases/tags/$tag)
-            name=$(echo "$release_json" | jq -r '.name // .tag_name')
-            body=$(echo "$release_json" | jq -r '.body // ""')
-            prerelease=$(echo "$release_json" | jq -r '.prerelease')
-            # 调用 Gitee API 创建/更新 Release
-            curl -X POST \
-              -H "Authorization: token $GITEE_TOKEN" \
-              -d "tag_name=$tag" \
-              -d "name=$name" \
-              -d "body=$body" \
-              -d "prerelease=$prerelease" \
-              -d "target_commitish=main" \
-              https://gitee.com/api/v5/repos/cor233/PeekPili/releases \
-              --fail || echo "Update failed, trying PATCH if exists..."
-            # 简单处理：如果 POST 失败（已存在），尝试 PATCH
-            # 实际可以写更完整的判断，但为简洁，略过（Gitee 的 PATCH 需要 release_id，需先 GET）
-          done
+          # 使用 Gitee API 创建发行版（如果已存在会失败，这里先尝试创建）
+          curl -X POST \
+            -H "Content-Type: application/json" \
+            -d "{
+                  \"access_token\": \"$GITEE_TOKEN\",
+                  \"tag_name\": \"$TAG_NAME\",
+                  \"name\": \"$NAME\",
+                  \"body\": $(echo "$BODY" | jq -R -s '.'),  # 转义 JSON 字符串
+                  \"target_commitish\": \"main\"
+                }" \
+            https://gitee.com/api/v5/repos/cor233/PeekPili/releases
